@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# 工作/产物(体积大/样本相关,不入库)
+out/
+deshell_out/
+*.apk
+*.dex
+*.bin
+*.idsig
+work/
+signed/
+dex_stage/
+
+# 系统
+.DS_Store
