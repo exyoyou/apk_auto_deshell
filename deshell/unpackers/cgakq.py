@@ -95,20 +95,87 @@ def axml_application_name(raw: bytes):
 
 
 def strip_junk_chunks(raw: bytes) -> bytes:
-    """删掉 AXML 中部的超大非法填充 chunk(type 不在合法集且 size>1MB),修正根 fileSize。"""
-    valid = {0x0001, 0x0180, 0x0100, 0x0101, 0x0102, 0x0103, 0x0104}
-    off = 8
+    """把被壳撑大/插了诱饵的 AXML 规范化:只保留 字符串池 + resourceMap + 真正的 XML 节点树
+    (从第一个合法 START_NAMESPACE 起的、尺寸正确的 0x100/0x101/0x102/0x103/0x104)。
+
+    壳不止塞一个 ~50MB 的非法 chunk,还在真树前插了诱饵(type 0x200、size 被改坏的假
+    END_NAMESPACE 等)。Android 能容忍,但 apktool 的 AXML 解码器会被带偏 → 解出的 manifest
+    丢了 xmlns:android 绑定,重建报 "unbound prefix"。只留规范 chunk 即可让 apktool 正常往返。
+    """
+    u16 = lambda o: struct.unpack_from('<H', raw, o)[0]
+    u32 = lambda o: struct.unpack_from('<I', raw, o)[0]
+    assert u16(0) == 0x0003, 'not AXML'
+    # 字符串池 @8;其后紧跟 resourceMap(0x0180,可无)
+    sp_size = u32(12)
+    cut = 8 + sp_size
+    if cut + 8 <= len(raw) and u16(cut) == 0x0180:
+        cut += u32(cut + 4)
+    head = raw[8:cut]                       # 字符串池(+resourceMap)原样
+    strings, _, _ = _axml_strings(raw)
+    name_re = re.compile(r'^[A-Za-z_][\w.:\-]*$')
+
+    def valid_attr_name(ni):
+        s = strings[ni] if 0 <= ni < len(strings) else None
+        return bool(s) and bool(name_re.match(s))
+
+    def norm_start_element(ch: bytes) -> bytes:
+        """把 START_ELEMENT 规范化成标准 AXML(让 apktool 能正常往返;Android 本就容忍)。
+        壳做了三重反工具处理,这里全部抹平:
+          ① attributeSize=21(每属性尾部多 1 字节、Res_value.size 改成 9)→ 回到标准 20 / size 8;
+          ② attributeStart 很大(属性前塞 junk)→ 紧凑到标准 20(属性紧跟 attrExt);
+          ③ 注入「名字含 >、换行、</manifest> 的垃圾属性」做 XML 注入 → 丢掉名字非法 XML 标识符的属性。
+        """
+        cu16 = lambda o: struct.unpack_from('<H', ch, o)[0]
+        aStart = cu16(24); aSize = cu16(26) or 20; aCount = cu16(28)
+        kept = bytearray()
+        n = 0
+        for i in range(aCount):
+            b = 16 + aStart + i * aSize
+            if not valid_attr_name(struct.unpack_from('<I', ch, b + 4)[0]):
+                continue                                         # ③ 丢注入诱饵属性
+            a = bytearray(ch[b:b + 20])                          # ① 取前 20 字节
+            struct.pack_into('<H', a, 12, 8)                     #    Res_value.size = 8
+            kept += a; n += 1
+        ext = bytearray(ch[16:16 + 20])                          # attrExt(20B)
+        struct.pack_into('<H', ext, 24 - 16, 20)                 # ② attributeStart = 20
+        struct.pack_into('<H', ext, 26 - 16, 20)                 #    attributeSize = 20
+        struct.pack_into('<H', ext, 28 - 16, n)                  #    attributeCount
+        struct.pack_into('<H', ext, 30 - 16, 0)                  #    idIndex=0
+        struct.pack_into('<H', ext, 32 - 16, 0)                  #    classIndex=0
+        struct.pack_into('<H', ext, 34 - 16, 0)                  #    styleIndex=0
+        new = bytearray(ch[:16]) + ext + kept                    # ResChunk+common(16) + attrExt + attrs
+        struct.pack_into('<I', new, 4, len(new))                 # 修正 chunk size
+        return bytes(new)
+
+    def node_ok(t, cs):
+        if t in (0x0100, 0x0101, 0x0103):   # START/END_NAMESPACE, END_ELEMENT:定长 24
+            return cs == 24
+        if t == 0x0102:                     # START_ELEMENT:变长,>=36
+            return cs >= 36
+        if t == 0x0104:                     # CDATA:28
+            return cs == 28
+        return False
+
+    nodes = bytearray()
+    off = cut
+    started = False
     while off + 8 <= len(raw):
-        t = struct.unpack_from('<H', raw, off)[0]
-        cs = struct.unpack_from('<I', raw, off + 4)[0]
+        t = u16(off); cs = u32(off + 4)
         if cs < 8 or off + cs > len(raw):
             break
-        if cs > 1_000_000 and t not in valid:
-            new = bytearray(raw[:off] + raw[off + cs:])
-            struct.pack_into('<I', new, 4, len(new))
-            return bytes(new)
+        if not started:
+            if t == 0x0100 and cs == 24:    # 真树起点:第一个合法 START_NAMESPACE
+                started = True
+                nodes += raw[off:off + cs]
+        elif node_ok(t, cs):
+            chunk = raw[off:off + cs]
+            nodes += norm_start_element(chunk) if t == 0x0102 else chunk
+        # 其余(填充/诱饵/坏尺寸)一律丢弃
         off += cs
-    return raw
+
+    out = bytearray(raw[:8]) + head + nodes
+    struct.pack_into('<I', out, 4, len(out))
+    return bytes(out)
 
 
 def replace_pool_string(raw: bytes, old: str, new: str) -> bytes:
