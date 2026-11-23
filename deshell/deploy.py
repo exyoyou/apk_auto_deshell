@@ -122,17 +122,19 @@ def escalate_guardians(pkg, cfg_json, lib):
     return bool(added)
 
 
-def run_analyze_if_needed(apk, out):
+def run_analyze(apk, out, reuse):
+    """跑 analyze(加壳版此时应已装好,用 --no-install)。reuse=True 且已有产物就复用。"""
     pkg = util.get_pkg(apk)
     dump_js = os.path.join(out, f'dump_{pkg}.js')
     cfg_json = os.path.join(out, f'config_{pkg}.json')
-    if not (os.path.exists(dump_js) and os.path.exists(cfg_json)):
-        print('[*] 还没有分析产物,先跑 analyze...')
-        r = subprocess.run([sys.executable, os.path.join(HERE, 'analyze.py'),
-                            '--apk', apk, '-o', out, '--no-install'])
-        if r.returncode != 0 or not os.path.exists(dump_js):
-            # 没装加壳版就让 analyze 装
-            subprocess.run([sys.executable, os.path.join(HERE, 'analyze.py'), '--apk', apk, '-o', out])
+    if reuse and os.path.exists(dump_js) and os.path.exists(cfg_json) and suicide_lib_from_js(dump_js):
+        print('[*] 复用已有分析产物(--reuse-analysis)')
+        return pkg, dump_js, cfg_json
+    print('[*] 跑 analyze 找自杀点 + 出配置...')
+    r = subprocess.run([sys.executable, os.path.join(HERE, 'analyze.py'),
+                        '--apk', apk, '-o', out, '--no-install'])
+    if r.returncode != 0 or not os.path.exists(dump_js):
+        sys.exit('[X] analyze 失败,单独跑 `analyze.py` 排查')
     return pkg, dump_js, cfg_json
 
 
@@ -144,6 +146,7 @@ def main():
     ap.add_argument('--timeout', type=int, default=28, help='等 dump 的秒数')
     ap.add_argument('--install', action='store_true', help='最后把脱壳 APK 装机并启动验证')
     ap.add_argument('--keep-inject', action='store_true', help='结束后不关闭注入(默认关,恢复干净)')
+    ap.add_argument('--reuse-analysis', action='store_true', help='复用已有 analyze 产物(默认每次重新分析)')
     args = ap.parse_args()
 
     try:
@@ -159,18 +162,19 @@ def main():
     import shutil
     for stale in ('signed', 'dex', 'dump_bin'):       # 清旧产物,避免 stale APK 假成功
         shutil.rmtree(os.path.join(args.out, stale), ignore_errors=True)
-    pkg, dump_js, cfg_json = run_analyze_if_needed(apk, args.out)
-    if not (os.path.exists(dump_js) and os.path.exists(cfg_json)):
-        sys.exit('[!] analyze 没产出配置,先单独跑 analyze.py 排查')
-    lib = suicide_lib_from_js(dump_js)
-    print(f'[*] 目标 {pkg},壳 so={lib or "(无)"}')
+    pkg = util.get_pkg(apk)
 
-    # 确保设备上装的是「加壳版」(dump 的前提;上次 --install 可能已把它换成脱壳版)
-    print('[*] 确保装的是加壳版 APK(供 dump)')
+    # ① 先确保设备上装的是「加壳版」(analyze 和 dump 都要扫它;上次 --install 可能已换成脱壳版)
+    print('[*] 确保装的是加壳版 APK(供分析 + dump)')
     util.adb('uninstall', pkg)
     r = util.adb('install', '-r', apk)
     if 'Success' not in (r.stdout + r.stderr):
         sys.exit(f'[X] 装加壳版失败: {r.stdout}{r.stderr}')
+
+    # ② 再 analyze(此时扫的才是加壳版;默认每次重新分析,避免复用扫空的坏配置)
+    pkg, dump_js, cfg_json = run_analyze(apk, args.out, reuse=args.reuse_analysis)
+    lib = suicide_lib_from_js(dump_js)
+    print(f'[*] 目标 {pkg},壳 so={lib or "(无)"}')
 
     for attempt in (1, 2):
         print(f'\n=== dump 尝试 {attempt} ===')

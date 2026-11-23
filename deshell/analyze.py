@@ -44,16 +44,23 @@ def ensure_running(apk, pkg, do_install):
         sys.exit(f'[!] {pkg} 未安装,去掉 --no-install 让我装,或先手动装')
 
     util.su(f'am force-stop {pkg}')
-    util.adb('shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1')
     import time
-    for _ in range(15):
+    time.sleep(1)
+    util.adb('shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1')
+    # 等到 app 真正起来、且 native 库 r-x 映射进内存(壳 so 此时才会自解密完)
+    pid = None
+    for _ in range(25):
         time.sleep(1)
         pid = util.pidof(pkg)
-        if pid:
-            # 再等壳 so 加载 + 自解密
-            time.sleep(4)
-            return util.pidof(pkg) or pid
-    sys.exit('[!] app 没起来(可能被壳秒退);检查设备')
+        if not pid:
+            continue
+        maps = util.su(f'cat /proc/{pid}/maps 2>/dev/null')
+        if re.search(r'r-xp\s+\S+\s+\S+\s+\S+\s+/data/(app|data)/\S+\.so', maps):
+            break
+    else:
+        sys.exit('[!] app 没起来或没加载 native 库(可能被壳秒退,或装的是脱壳版);检查设备')
+    time.sleep(5)   # 再给壳 so 自解密 + 其余库加载一点时间
+    return util.pidof(pkg) or pid
 
 
 def running_app_procs(pkg):
@@ -206,23 +213,33 @@ def main():
     pid = ensure_running(apk, pkg, do_install=not args.no_install)
     print(f'[*] 主进程 pid={pid},开始 dump + 扫描壳 so...')
 
-    mods = app_so_rx_segments(pid)
-    if not mods:
-        sys.exit('[!] 没找到 app 私有 .so;进程可能已退,或没有 native 壳')
-
+    import time
     results = {}  # lib路径 -> {sysno: [off,...]}
-    for path, d in mods.items():
-        found = {}
-        for (s, e) in d['rx']:
-            code = dump_mem(pid, s, e)
-            if not code:
-                continue
-            for off, sysno in scan_suicide(code, s, d['base']):
-                found.setdefault(sysno, []).append(off)
-        if found:
-            results[path] = found
-            tags = ', '.join(f'{SYS[k]}@' + '/'.join(hex(x) for x in v) for k, v in sorted(found.items()))
-            print(f'    {os.path.basename(path)}: {tags}')
+    # 壳 so 自解密有时稍慢;首轮扫到 0 个自杀点就多等再扫,最多 4 轮
+    for rnd in range(4):
+        cur = util.pidof(pkg) or pid     # 进程可能重启,取最新 pid
+        mods = app_so_rx_segments(cur)
+        results = {}
+        for path, d in mods.items():
+            found = {}
+            for (s, e) in d['rx']:
+                code = dump_mem(cur, s, e)
+                if not code:
+                    continue
+                for off, sysno in scan_suicide(code, s, d['base']):
+                    found.setdefault(sysno, []).append(off)
+            if found:
+                results[path] = found
+        if results or not mods:
+            pid = cur
+            break
+        print(f'    第 {rnd+1} 轮没扫到自杀点,等 3s 再扫(壳 so 可能还没自解密)...')
+        time.sleep(3)
+    for path, found in results.items():
+        tags = ', '.join(f'{SYS[k]}@' + '/'.join(hex(x) for x in v) for k, v in sorted(found.items()))
+        print(f'    {os.path.basename(path)}: {tags}')
+    if not app_so_rx_segments(util.pidof(pkg) or pid):
+        sys.exit('[!] 没找到 app 私有 .so;进程可能已退,或装的是脱壳版/没有 native 壳')
 
     # 选自杀壳 so:优先同时含 exit_group(94) 和 kill(129);否则含 kill 的;否则含 exit*
     def rank(item):
