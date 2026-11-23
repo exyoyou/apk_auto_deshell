@@ -77,8 +77,10 @@ def main():
         check('设备在线', False, 'adb 缺', fatal=False)
 
     print()
+    print('提示:dump 阶段的 ZygiskFrida / gadget 等若缺(上面 [!]),有 root 可一键自动装:')
+    print('      python3 deshell/setup.py')
     if ok:
-        print(f'{OK} 重打包必需项齐全。dump 阶段按上面的 [!] 补齐即可。')
+        print(f'{OK} 重打包必需项齐全。')
     else:
         print(f'{BAD} 有重打包必需项缺失(上面 [X]),先补齐再跑 repack.py。')
         sys.exit(1)

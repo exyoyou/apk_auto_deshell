@@ -8,6 +8,7 @@ requires-python = ">=3.8"
 deshell-repack = "deshell.repack:main"
 deshell-analyze = "deshell.analyze:main"
 deshell-doctor = "deshell.doctor:main"
+deshell-setup = "deshell.setup:main"
 
 [build-system]
 requires = ["setuptools>=61"]

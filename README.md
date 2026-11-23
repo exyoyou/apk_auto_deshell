@@ -59,13 +59,14 @@
 > 重打包出来的脱壳 APK **装到任意手机都能跑,不需要 root / 不需要下面这些**。
 > 下面这套只在「你要自己从加壳 app 抓 DEX」时才需要。
 
-- **已 root**(KernelSU / Magisk / APatch 任一)
-- **Zygisk 实现**:ZygiskNext(`zygisksu`)或 Magisk 自带 Zygisk
-- **ZygiskFrida 模块**([lico-n/ZygiskFrida](https://github.com/lico-n/ZygiskFrida)),刷入重启
-- **frida-gadget .so**(版本和电脑上 frida client 对齐),放到 ZygiskFrida 工作目录
-  `/data/local/tmp/re.zyg.fri/libgadget.so`
-- 该目录下三个配置文件(见下「用法 B」):`config.json`(注入哪些进程)、
-  `libgadget.config.so`(script 模式)、`config.json.example`(= 本项目的 `dump_full.js`)
+**只要已 root,下面的 ②③④ 全部用 `python3 deshell/setup.py` 一键自动装齐**(下载对齐版 gadget +
+安装 ZygiskFrida 模块 + 铺配置)。手动的话:
+
+- ① **已 root**(KernelSU / Magisk / APatch 任一)+ Zygisk 实现(ZygiskNext `zygisksu` 或 Magisk 自带)
+- ② **ZygiskFrida 模块**([lico-n/ZygiskFrida](https://github.com/lico-n/ZygiskFrida)),刷入重启
+- ③ **frida-gadget .so**(版本和电脑 frida client 对齐)→ `/data/local/tmp/re.zyg.fri/libgadget.so`
+- ④ 该目录下的配置:`config.json`(注入哪些进程)、`libgadget.config.so`(script 模式)、
+  `config.json.example`(= `analyze.py` 生成的 dump 脚本)
 - `adb` 能拿到 root(`su`)
 
 ### 获取目标包名 / 入口
@@ -149,6 +150,7 @@ python3 deshell/repack.py ... --keep-shell-lib libvuoum.so,libvuoum-x86.so
 | 脚本 | 作用 |
 |---|---|
 | `deshell/doctor.py` | **环境自检**:一次性查齐电脑端工具(java/apktool/signer/zip/aapt)、dump 工具(adb/capstone/frida)、设备(在线/root/ZygiskFrida/gadget),缺啥报啥 |
+| `deshell/setup.py` | **有 root 一键装齐 dump 环境**:自动下载安装 ZygiskFrida 模块 + 对齐本机 frida 版本的 frida-gadget + 铺好配置(把 doctor 报红的项自动修好) |
 | `deshell/analyze.py` | **root + capstone 自动分析**:选 APK → 读包名 → 内存里扫壳 so 的 inline-svc 自杀点 → 按「是否加载壳 so」识别注入目标进程 → 生成填好配置的 dump 脚本 **和 ZygiskFrida config.json**(需 capstone) |
 | `deshell/repack.py` | **主编排器**:(选 APK)去壳 + 换真 DEX + 重签名,一条命令出可装 APK |
 | `deshell/find_application.py` | 从 DEX 解析继承链,**自动识别真实 Application 入口**(叶子类 / 按链长) |
