@@ -76,6 +76,8 @@ def main():
     print(f'[*] 真实 Application 入口: {app}')
     print(f'[*] 真 DEX {len(dex_files)} 个: {", ".join(os.path.basename(x) for x in dex_files)}')
 
+    args.apk = os.path.abspath(args.apk)
+    args.out = os.path.abspath(args.out)          # 后面 zip 用 cwd=stage,路径必须绝对
     os.makedirs(args.out, exist_ok=True)
     work = os.path.join(args.out, 'work')
     unsigned = os.path.join(args.out, 'unsigned.apk')
