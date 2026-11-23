@@ -51,6 +51,7 @@
 | `aapt`(Android build-tools) | 看包名/入口 | `~/Android/Sdk/build-tools/*/aapt`,非必需 |
 | `adb` | dump + 装机 | |
 | `frida` client | dump | 版本要和手机上的 gadget **对齐** |
+| `capstone`(python) | 自动分析 | `analyze.py` 反汇编找自杀点;用带它的解释器跑(本机 `frida/.venv`) |
 | `dexdump` / `jadx` | 核对(可选) | 验证脱出的 dex |
 
 ### 手机端(device)——**仅 dump 阶段需要**
@@ -105,22 +106,36 @@ python3 deshell/repack.py --apk 原始.apk --dex-dir dexdir --app com.MApplicati
 python3 deshell/repack.py ... --keep-shell-lib libvuoum.so,libvuoum-x86.so
 ```
 
-### B. 还没有 DEX → 先用 dump 脚本抓(针对易盾这类「加载时整体解密」的壳)
+### B. 还没有 DEX → 先 dump(针对易盾这类「加载时整体解密」的壳)
 
-1. 把 `deshell/dump_full.js` 顶部 `CFG` 改成你的包名/壳 so/自杀点偏移(见脚本注释和手册)。
-2. 作为 frida-gadget 的 script 注入(推荐 ZygiskFrida **双 target**:主进程 + 守护进程都注入,
-   两者都跑本脚本,守护进程才 kill 不了主进程)。
-3. 启动 app,等十几秒,脚本会把每个已解密 DEX 写到 `/data/data/<pkg>/zf_mdex_N.bin`。
+**不用手改任何配置**。`analyze.py` 会用 root + capstone 自动分析,生成填好的 dump 脚本。
+
+1. **自动分析出配置**(要用带 capstone/frida 的解释器):
+   ```bash
+   # 交互选 apks/ 里的 APK → aapt 读包名 → 装上跑起来 →
+   # root 从内存 dump 各壳 so 的 r-x 段 → capstone 扫 inline-svc 自杀点(exit_group/kill)→
+   # 自动定出 PKG / SUICIDE_LIB / SUICIDE_OFFS,生成 out/dump_<pkg>.js
+   /path/to/.venv/bin/python deshell/analyze.py          # 需 capstone(本机:frida/.venv)
+   ```
+   典型输出:`自杀壳 so: libvuoum.so / SUICIDE_OFFS = [0x27bd4, 0x27c34]`。
+
+2. 把生成的 `out/dump_<pkg>.js` 作为 frida-gadget 的 script 注入
+   (推荐 ZygiskFrida **双 target**:主进程 + 守护进程都注入,两者都跑它,守护进程才 kill 不了主进程)。
+
+3. 启动 app,等十几秒,脚本把每个已解密 DEX 写到 `/data/data/<pkg>/zf_mdex_N.bin`。
+
 4. 拉下来并重建成合法 DEX:
    ```bash
    # dump 文件在 app 私有目录(/data/data/<pkg>/,mode 0600、app uid 所有),
-   # 所以不能用 adb pull(会 "0 files pulled" 权限失败),必须用 root 的 su -c cat 导出:
+   # 不能用 adb pull(会 "0 files pulled" 权限失败),必须用 root 的 su -c cat 导出:
    for n in $(seq 1 20); do adb shell su -c "cat /data/data/<pkg>/zf_mdex_$n.bin" > zf_mdex_$n.bin 2>/dev/null; done
-   # 可选:看脚本抓到几个 / 诊断
-   adb shell su -c "cat /data/data/<pkg>/zf_mdex_manifest.txt"
-   python3 deshell/rebuild_dex.py zf_mdex_*.bin      # 出 classes_main_N.dex
+   adb shell su -c "cat /data/data/<pkg>/zf_mdex_manifest.txt"   # 可选:看抓到几个
+   python3 deshell/rebuild_dex.py zf_mdex_*.bin                   # 出 classes_main_N.dex
    ```
-5. 回到 A。
+5. 回到 A(`repack.py` 不给 `--apk` 时也会自动在 `apks/` 里让你选)。
+
+> 若 `analyze.py` 扫不到自杀点(壳不用 inline-svc 自杀,或该壳没 native 反调试),它仍会填好 PKG,
+> `SUICIDE_LIB/OFFS` 留空也能跑——很多壳只靠 ④ 的 DEX 加密,不需要反自杀。
 
 ---
 
@@ -128,11 +143,13 @@ python3 deshell/repack.py ... --keep-shell-lib libvuoum.so,libvuoum-x86.so
 
 | 脚本 | 作用 |
 |---|---|
-| `deshell/repack.py` | **主编排器**:去壳 + 换真 DEX + 重签名,一条命令出可装 APK |
-| `deshell/find_application.py` | 从 DEX 解析继承链,**自动识别真实 Application 入口**(叶子类) |
+| `deshell/analyze.py` | **root + capstone 自动分析**:选 APK → 读包名 → 内存里扫壳 so 的 inline-svc 自杀点 → 生成填好配置的 dump 脚本(需 capstone) |
+| `deshell/repack.py` | **主编排器**:(选 APK)去壳 + 换真 DEX + 重签名,一条命令出可装 APK |
+| `deshell/find_application.py` | 从 DEX 解析继承链,**自动识别真实 Application 入口**(叶子类 / 按链长) |
 | `deshell/rebuild_dex.py` | 把被抹了 `dex\n` 头的内存 dump 修复成合法 DEX(补头 + 修 checksum/signature) |
 | `deshell/list_classdefs.py` | 快速枚举 DEX 里所有已定义类(不反汇编,用于核对完整性) |
-| `deshell/dump_full.js` | frida-gadget 脚本:反自杀 + **扫全部 rw 匿名区 dump 全部已解密 DEX** |
+| `deshell/dump_full.js` | frida-gadget 脚本模板:反自杀 + **扫全部 rw 匿名区 dump 全部已解密 DEX**(CFG 由 `analyze.py` 填) |
+| `deshell/util.py` | 共享:终端选 APK、aapt 读包名、adb/root 封装 |
 
 ---
 

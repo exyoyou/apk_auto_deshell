@@ -13,7 +13,9 @@
  * dump 产物写到 /data/data/<PKG>/zf_mdex_N.bin,外部用 adb 拉取后交给 rebuild_dex.py。
  */
 (function () {
-  // ============================ 配置(换 app/设备改这里)============================
+  // ======================== 配置:由 analyze.py 自动分析并填入 ========================
+  // 一般不用手改。跑 `analyze.py` 会自动识别包名、壳 so、自杀点偏移并生成填好的副本
+  // (out/dump_<pkg>.js)。下面是上次分析的样本默认值,仅供参考 / 兜底手填。
   var CFG = {
     PKG: 'com.join.android.app.mgsim.wufun',        // 目标包名(决定 dump 落盘目录)
     SUICIDE_LIB: 'libvuoum.so',                      // 自杀逻辑所在壳 so(没有就留空字符串)

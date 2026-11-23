@@ -19,6 +19,9 @@
 """
 import argparse, os, re, shutil, subprocess, sys, glob
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import util  # noqa: E402
+
 HOME = os.path.expanduser('~')
 APKTOOL = os.environ.get('APKTOOL_JAR', f'{HOME}/.apklab/apktool_3.0.3.jar')
 SIGNER = os.environ.get('SIGNER_JAR', f'{HOME}/.apklab/uber-apk-signer-1.3.0.jar')
@@ -27,20 +30,6 @@ SIGNER = os.environ.get('SIGNER_JAR', f'{HOME}/.apklab/uber-apk-signer-1.3.0.jar
 def run(cmd, **kw):
     print('  $', ' '.join(cmd))
     return subprocess.run(cmd, check=True, **kw)
-
-
-def pkg_from_apk(apk):
-    """用 aapt 直接从 APK 读包名(拿不到就返回 None)"""
-    aapt = shutil.which('aapt') or next(iter(sorted(
-        glob.glob(os.path.expanduser('~/Android/Sdk/build-tools/*/aapt')), reverse=True)), None)
-    if not aapt:
-        return None
-    try:
-        out = subprocess.run([aapt, 'dump', 'badging', apk], capture_output=True, text=True).stdout
-        m = re.search(r"package: name='([^']+)'", out)
-        return m.group(1) if m else None
-    except Exception:
-        return None
 
 
 def collect_dexes(dex_dir, dex_list):
@@ -69,7 +58,8 @@ def detect_app(dex_files, pkg):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--apk', required=True, help='原始(加壳)APK')
+    ap.add_argument('--apk', help='原始(加壳)APK;不给就在 --apks-dir 里交互选')
+    ap.add_argument('--apks-dir', default='apks', help='APK 目录(默认 apks/,--apk 未给时用)')
     ap.add_argument('--dex-dir', help='脱出的真 DEX 所在目录(取其中所有 *.dex)')
     ap.add_argument('--dex', help='或直接逗号分隔的 dex 列表(覆盖 --dex-dir)')
     ap.add_argument('--app', help='真实 Application 全名(如 com.MApplication)')
@@ -83,8 +73,10 @@ def main():
         if not os.path.exists(jar):
             sys.exit(f'[!] 找不到 {name}: {jar}(用环境变量 APKTOOL_JAR / SIGNER_JAR 指定)')
 
+    args.apk = util.pick_apk(args.apks_dir, args.apk)   # --apk 未给则终端选
+    print(f'[*] 原始 APK: {args.apk}')
     dex_files = collect_dexes(args.dex_dir, args.dex)
-    pkg = args.pkg or pkg_from_apk(args.apk)       # 没传 --pkg 就用 aapt 从 APK 读(辅助 --auto 排序)
+    pkg = args.pkg or util.get_pkg(args.apk)       # 没传 --pkg 就用 aapt 从 APK 读(辅助 --auto 排序)
     if pkg and not args.pkg:
         print(f'[*] 包名(aapt 自动识别): {pkg}')
     app = args.app or (detect_app(dex_files, pkg) if args.auto else None)
