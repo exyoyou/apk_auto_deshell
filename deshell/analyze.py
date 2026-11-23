@@ -92,7 +92,8 @@ def declared_processes(apk, pkg):
     return sorted(names)
 
 
-GADGET_PATH = '/data/local/tmp/re.zyg.fri/libgadget.so'   # ZygiskFrida 注入的 gadget(按你的环境改)
+ZYG_DIR = '/data/local/tmp/re.zyg.fri'                    # ZygiskFrida 工作目录
+GADGET_PATH = ZYG_DIR + '/libgadget.so'                   # ZygiskFrida 注入的 gadget
 
 
 def emit_zygiskfrida_config(path, procs):

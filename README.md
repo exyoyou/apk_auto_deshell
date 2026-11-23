@@ -84,6 +84,18 @@ aapt dump badging 目标.apk | grep -E "^package|launchable-activity"
 
 ## 用法
 
+### 🚀 一条命令全自动(有 root 的设备)
+
+```bash
+# 把加壳 APK 放进 apks/,然后(用带 capstone/frida 的解释器):
+/path/to/.venv/bin/python deshell/setup.py          # 首次:自动装 ZygiskFrida + 对齐版 gadget
+/path/to/.venv/bin/python deshell/deploy.py --install
+# deploy 全自动:选 APK → 内存找自杀点 → 注入 dump 全部 DEX → 重建 → 去壳重签名 → 装机验证
+# 产物:out/signed/*-debugSigned.apk
+```
+
+下面是分步/手动用法。
+
 ### A. 已经有脱出的 DEX → 直接出可装 APK
 
 ```bash
@@ -149,6 +161,7 @@ python3 deshell/repack.py ... --keep-shell-lib libvuoum.so,libvuoum-x86.so
 
 | 脚本 | 作用 |
 |---|---|
+| `deshell/deploy.py` | **一条命令全自动**:选 APK → (analyze 自动出配置)→ 推 ZygiskFrida → 杀透重启 → 轮询拉 DEX → 重建 → 去壳重签名 →(可选)装机验证。全程无需点屏 |
 | `deshell/doctor.py` | **环境自检**:一次性查齐电脑端工具(java/apktool/signer/zip/aapt)、dump 工具(adb/capstone/frida)、设备(在线/root/ZygiskFrida/gadget),缺啥报啥 |
 | `deshell/setup.py` | **有 root 一键装齐 dump 环境**:自动下载安装 ZygiskFrida 模块 + 对齐本机 frida 版本的 frida-gadget + 铺好配置(把 doctor 报红的项自动修好) |
 | `deshell/analyze.py` | **root + capstone 自动分析**:选 APK → 读包名 → 内存里扫壳 so 的 inline-svc 自杀点 → 按「是否加载壳 so」识别注入目标进程 → 生成填好配置的 dump 脚本 **和 ZygiskFrida config.json**(需 capstone) |

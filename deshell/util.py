@@ -81,3 +81,26 @@ def has_root():
 def pidof(pkg):
     p = su(f'pidof {pkg}').strip().split()
     return int(p[0]) if p else None
+
+
+def place_in_zyg(local_path, remote_path):
+    """把本机文件放到 system_file 标签目录(如 re.zyg.fri)里。
+
+    ksu root 能覆盖已存在文件、但不能 create 新文件。所以:已存在→cp 覆盖;
+    不存在→硬链接同目录一个已存在文件出目标名(继承 system_file 标签,绕过 create 限制)再 cp 覆盖。
+    返回 (是否成功, cp 的输出)。
+    """
+    import posixpath
+    rdir = posixpath.dirname(remote_path)
+    base = posixpath.basename(remote_path)
+    tmp = f'/data/local/tmp/.push_{base}'
+    adb('push', local_path, tmp)
+    exists = 'No such' not in su(f'ls {remote_path} 2>&1')
+    if not exists:
+        donor = next((d for d in su(f'ls {rdir} 2>/dev/null').split() if d), None)
+        if donor:
+            su(f'ln {rdir}/{donor} {remote_path} 2>/dev/null')
+    out = su(f'cp {tmp} {remote_path} 2>&1')
+    su(f'rm -f {tmp}')
+    ok = ('No such' not in su(f'ls {remote_path} 2>&1')) and ('denied' not in out.lower())
+    return ok, out

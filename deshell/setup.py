@@ -64,24 +64,6 @@ def root_manager():
     return None
 
 
-def place_in_zyg(local_path, remote_path):
-    """把本机文件放到 system_file 标签的 re.zyg.fri 里(覆盖已存在 / 否则硬链接后覆盖)。"""
-    base = os.path.basename(remote_path)
-    tmp = f'/data/local/tmp/.push_{base}'
-    util.adb('push', local_path, tmp)
-    exists = 'No such' not in util.su(f'ls {remote_path} 2>&1')
-    if not exists:
-        # 找同目录一个已存在文件,硬链接出目标名(继承 system_file 标签,绕过 create 限制)
-        donor = util.su(f'ls {ZYG_DIR} 2>/dev/null').split()
-        donor = next((d for d in donor if d), None)
-        if donor:
-            util.su(f'ln {ZYG_DIR}/{donor} {remote_path} 2>/dev/null')
-    out = util.su(f'cp {tmp} {remote_path} 2>&1')
-    util.su(f'rm -f {tmp}')
-    ok = 'No such' not in util.su(f'ls {remote_path} 2>&1') and 'denied' not in out.lower()
-    return ok, out
-
-
 def ensure_gadget(frida_ver, arch, force):
     # 已有且版本一致就跳过
     if not force and 'No such' not in util.su(f'ls {GADGET} 2>&1'):
@@ -103,7 +85,7 @@ def ensure_gadget(frida_ver, arch, force):
     if 'No such' in util.su(f'ls {ZYG_DIR} 2>&1'):
         print(f'[X] {ZYG_DIR} 不存在(ZygiskFrida 还没装好/没重启);先装模块并重启再跑本脚本')
         return False
-    ok, out = place_in_zyg(so, GADGET)
+    ok, out = util.place_in_zyg(so, GADGET)
     print(f'[{"✓" if ok else "X"}] gadget 放置 {GADGET}' + ('' if ok else f'  ({out.strip()})'))
     return ok
 
@@ -152,7 +134,7 @@ def scaffold_configs():
             t.write(content)
             local = t.name
         # 已存在才覆盖;不存在也尝试(place_in_zyg 会硬链接)
-        ok, _ = place_in_zyg(local, f'{ZYG_DIR}/{name}')
+        ok, _ = util.place_in_zyg(local, f'{ZYG_DIR}/{name}')
         os.unlink(local)
         results.append((name, ok))
     for name, ok in results:

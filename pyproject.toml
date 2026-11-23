@@ -9,6 +9,7 @@ deshell-repack = "deshell.repack:main"
 deshell-analyze = "deshell.analyze:main"
 deshell-doctor = "deshell.doctor:main"
 deshell-setup = "deshell.setup:main"
+deshell-deploy = "deshell.deploy:main"
 
 [build-system]
 requires = ["setuptools>=61"]
