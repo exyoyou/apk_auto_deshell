@@ -56,6 +56,59 @@ def ensure_running(apk, pkg, do_install):
     sys.exit('[!] app 没起来(可能被壳秒退);检查设备')
 
 
+def running_app_procs(pkg):
+    """返回当前在跑的 app 进程 [(name, pid), ...](主进程 + <pkg>:xxx 子进程)。"""
+    out = util.su('ps -A -o PID,NAME')
+    procs = []
+    for ln in out.splitlines():
+        parts = ln.split(None, 1)
+        if len(parts) != 2 or not parts[0].isdigit():
+            continue
+        pid, name = int(parts[0]), parts[1].strip()
+        if name == pkg or name.startswith(pkg + ':'):
+            procs.append((name, pid))
+    procs.sort(key=lambda t: (t[0] != pkg, t[0]))
+    return procs
+
+
+def proc_has_lib(pid, lib):
+    """该进程的 maps 里是否加载了 lib(判定它是否也会执行壳自杀逻辑)。"""
+    if not lib:
+        return False
+    return lib in util.su(f'cat /proc/{pid}/maps 2>/dev/null')
+
+
+def declared_processes(apk, pkg):
+    """从 manifest 读所有声明的 android:process(静态、不依赖运行时),返回完整进程名集合。"""
+    aapt = util.find_aapt()
+    if not aapt:
+        return []
+    out = subprocess.run([aapt, 'dump', 'xmltree', apk, 'AndroidManifest.xml'],
+                         capture_output=True, text=True).stdout
+    names = set()
+    for m in re.finditer(r'android:process\([^)]*\)="([^"]+)"', out):
+        v = m.group(1)
+        names.add(v if not v.startswith(':') else pkg + v)
+    return sorted(names)
+
+
+GADGET_PATH = '/data/local/tmp/re.zyg.fri/libgadget.so'   # ZygiskFrida 注入的 gadget(按你的环境改)
+
+
+def emit_zygiskfrida_config(path, procs):
+    """生成 ZygiskFrida 的 config.json:主进程 + 每个守护进程都注入(都跑 dump 脚本)。"""
+    import json
+    targets = []
+    for i, name in enumerate(procs):
+        targets.append({
+            'app_name': name,
+            'enabled': True,
+            'start_up_delay_ms': 3000 if name.count(':') == 0 else 500,
+            'injected_libraries': [{'path': GADGET_PATH}],
+        })
+    open(path, 'w', encoding='utf-8').write(json.dumps({'targets': targets}, indent=2, ensure_ascii=False))
+
+
 def app_so_rx_segments(pid):
     """返回 {so路径: {'base': 模块基址, 'rx': [(start,end), ...]}},只要 app 私有的 .so。"""
     maps = util.su(f'cat /proc/{pid}/maps')
@@ -141,10 +194,12 @@ def main():
         sys.exit('[!] 需要 capstone:用带它的解释器跑,如\n'
                  '    /home/youyou/android_root_tools/frida/.venv/bin/python deshell/analyze.py ...')
 
+    if not util.find_aapt():
+        sys.exit('[!] 找不到 aapt(读包名用):装 Android build-tools,或 export PATH 指到 aapt')
     apk = util.pick_apk(args.apks_dir, args.apk)
     pkg = util.get_pkg(apk)
     if not pkg:
-        sys.exit('[!] aapt 读不到包名')
+        sys.exit('[!] aapt 读不到包名(APK 损坏?)')
     print(f'[*] 目标: {pkg}  ({os.path.basename(apk)})')
 
     pid = ensure_running(apk, pkg, do_install=not args.no_install)
@@ -188,14 +243,40 @@ def main():
             print(f'      {SYS[sysno]}(x8={sysno}) @ ' + ', '.join(hex(o) for o in ol))
         print(f'    SUICIDE_OFFS = [{", ".join(hex(o) for o in offs)}]')
 
+    # 识别注入目标:凡加载了自杀壳 so 的进程都要注入+patch(守护进程才 kill 不了主进程)
+    running = running_app_procs(pkg)
+    targets = []
+    print('\n[*] 当前在跑的 app 进程:')
+    for name, ppid in running:
+        hit = proc_has_lib(ppid, lib) if lib else (name == pkg)
+        tag = '← 加载了 %s,注入' % lib if (lib and hit) else ('← 主进程,注入' if name == pkg else '← 不加载壳 so,跳过')
+        if name == pkg or hit:
+            targets.append(name)
+        print(f'      {name:45s} pid={ppid}  {tag}')
+
+    # manifest 声明但此刻没起的进程(如 :mind 常在用户同意隐私后才启动)
+    declared = declared_processes(apk, pkg)
+    later = [n for n in declared if n not in {t for t in targets} and n not in {r[0] for r in running}]
+    if later:
+        print('\n[!] manifest 还声明了这些进程(此刻未运行,可能稍后才起):')
+        print('      ' + ', '.join(n.replace(pkg, '') or pkg for n in later[:20]) + (' …' if len(later) > 20 else ''))
+        print(f'    若启动后主进程被 signal 9 杀,说明某守护进程(多为 :mind/:channel 类)也加载了 {lib or "壳 so"},')
+        print('    把它的全名加进生成的 config.json 的 targets 即可(判据:它的 /proc/<pid>/maps 里有该 so)。')
+
     os.makedirs(args.out, exist_ok=True)
     out_js = os.path.join(args.out, f'dump_{pkg}.js')
+    out_cfg = os.path.join(args.out, f'config_{pkg}.json')
     fill_template(os.path.join(here, 'dump_full.js'), out_js, pkg, lib, offs)
-    print(f'\n[✓] 已生成填好配置的 dump 脚本: {os.path.abspath(out_js)}')
-    print('    (PKG / SUICIDE_LIB / SUICIDE_OFFS 已自动填入,其余用默认值)')
-    print('\n下一步:把它作为 ZygiskFrida 的 script 注入(双 target:主进程 + 守护进程),')
-    print('    启动 app,等十几秒,到 /data/data/%s/zf_mdex_*.bin 拉 DEX → rebuild_dex.py。' % pkg)
-    print('    守护进程名用:adb shell su -c "ps -A -o NAME | grep %s" 查(通常是 %s:xxx)。' % (pkg.split('.')[-1], pkg))
+    emit_zygiskfrida_config(out_cfg, targets)
+
+    print(f'\n[✓] dump 脚本(CFG 已填):     {os.path.abspath(out_js)}')
+    print(f'[✓] ZygiskFrida 配置(多 target):{os.path.abspath(out_cfg)}')
+    print('\n下一步:')
+    print(f'    1) 把 {os.path.basename(out_cfg)} 覆盖到设备 /data/local/tmp/re.zyg.fri/config.json')
+    print(f'    2) 把 {os.path.basename(out_js)} 覆盖到 .../re.zyg.fri/config.json.example(gadget script)')
+    print('    3) 确认 .../re.zyg.fri/libgadget.so 是对齐版本的 gadget;杀透 app 重启')
+    print(f'    4) 等十几秒,拉 DEX:for n in $(seq 1 20); do adb shell su -c "cat /data/data/{pkg}/zf_mdex_$n.bin" > zf_mdex_$n.bin; done')
+    print('    5) python3 deshell/rebuild_dex.py zf_mdex_*.bin  →  python3 deshell/repack.py --dex-dir . --auto')
 
 
 if __name__ == '__main__':

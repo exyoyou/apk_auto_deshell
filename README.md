@@ -110,17 +110,22 @@ python3 deshell/repack.py ... --keep-shell-lib libvuoum.so,libvuoum-x86.so
 
 **不用手改任何配置**。`analyze.py` 会用 root + capstone 自动分析,生成填好的 dump 脚本。
 
+0. 先自检环境:`python3 deshell/doctor.py`(缺的工具会标红)。
+
 1. **自动分析出配置**(要用带 capstone/frida 的解释器):
    ```bash
    # 交互选 apks/ 里的 APK → aapt 读包名 → 装上跑起来 →
    # root 从内存 dump 各壳 so 的 r-x 段 → capstone 扫 inline-svc 自杀点(exit_group/kill)→
-   # 自动定出 PKG / SUICIDE_LIB / SUICIDE_OFFS,生成 out/dump_<pkg>.js
+   # 自动定出 PKG / SUICIDE_LIB / SUICIDE_OFFS,并按「哪些进程加载了壳 so」识别注入目标
    /path/to/.venv/bin/python deshell/analyze.py          # 需 capstone(本机:frida/.venv)
    ```
+   产出两份:`out/dump_<pkg>.js`(填好 CFG 的 dump 脚本)和 `out/config_<pkg>.json`(ZygiskFrida 多 target 配置)。
    典型输出:`自杀壳 so: libvuoum.so / SUICIDE_OFFS = [0x27bd4, 0x27c34]`。
 
-2. 把生成的 `out/dump_<pkg>.js` 作为 frida-gadget 的 script 注入
-   (推荐 ZygiskFrida **双 target**:主进程 + 守护进程都注入,两者都跑它,守护进程才 kill 不了主进程)。
+2. 把两份覆盖到 ZygiskFrida 工作目录:
+   `config_<pkg>.json → .../re.zyg.fri/config.json`、`dump_<pkg>.js → .../re.zyg.fri/config.json.example`。
+   > 注:守护进程(如 `:mind`)常在**同意隐私后才起**,此刻 analyze 看不到它。若启动后主进程被 signal 9 杀,
+   > 按 analyze 的提示把那个也加载了壳 so 的守护进程全名加进 config.json 的 `targets`(判据:它 maps 里有壳 so)。
 
 3. 启动 app,等十几秒,脚本把每个已解密 DEX 写到 `/data/data/<pkg>/zf_mdex_N.bin`。
 
@@ -143,7 +148,8 @@ python3 deshell/repack.py ... --keep-shell-lib libvuoum.so,libvuoum-x86.so
 
 | 脚本 | 作用 |
 |---|---|
-| `deshell/analyze.py` | **root + capstone 自动分析**:选 APK → 读包名 → 内存里扫壳 so 的 inline-svc 自杀点 → 生成填好配置的 dump 脚本(需 capstone) |
+| `deshell/doctor.py` | **环境自检**:一次性查齐电脑端工具(java/apktool/signer/zip/aapt)、dump 工具(adb/capstone/frida)、设备(在线/root/ZygiskFrida/gadget),缺啥报啥 |
+| `deshell/analyze.py` | **root + capstone 自动分析**:选 APK → 读包名 → 内存里扫壳 so 的 inline-svc 自杀点 → 按「是否加载壳 so」识别注入目标进程 → 生成填好配置的 dump 脚本 **和 ZygiskFrida config.json**(需 capstone) |
 | `deshell/repack.py` | **主编排器**:(选 APK)去壳 + 换真 DEX + 重签名,一条命令出可装 APK |
 | `deshell/find_application.py` | 从 DEX 解析继承链,**自动识别真实 Application 入口**(叶子类 / 按链长) |
 | `deshell/rebuild_dex.py` | 把被抹了 `dex\n` 头的内存 dump 修复成合法 DEX(补头 + 修 checksum/signature) |

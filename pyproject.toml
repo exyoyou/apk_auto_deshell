@@ -7,6 +7,7 @@ requires-python = ">=3.8"
 [project.scripts]
 deshell-repack = "deshell.repack:main"
 deshell-analyze = "deshell.analyze:main"
+deshell-doctor = "deshell.doctor:main"
 
 [build-system]
 requires = ["setuptools>=61"]
