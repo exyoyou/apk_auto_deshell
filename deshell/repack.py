@@ -155,7 +155,7 @@ def main():
         print('   ', os.path.abspath(s))
     print('\n安装(签名不同,先卸原版;脱壳版可装在未 root 的机器上):')
     print(f'    adb uninstall {pkg or "<包名>"}')
-    print(f'    adb install -r {signed[0] if signed else "<signed.apk>"}')
+    print(f'    adb install -r --user 0 {signed[0] if signed else "<signed.apk>"}')
 
 
 if __name__ == '__main__':

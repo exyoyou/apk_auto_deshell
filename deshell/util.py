@@ -83,6 +83,43 @@ def pidof(pkg):
     return int(p[0]) if p else None
 
 
+DEFAULT_USER = '0'   # adb install 默认装到 user 0(否则 adb 会给所有用户装);可被显式覆盖
+
+
+def install_apk(apk, user=None, reinstall=True):
+    """装 APK,默认 --user 0(除非传了别的 user;user='all' 则不加 --user,恢复 adb 默认全用户)。
+    返回 CompletedProcess。"""
+    u = DEFAULT_USER if user is None else str(user)
+    cmd = ['install']
+    if reinstall:
+        cmd.append('-r')
+    if u != 'all':
+        cmd += ['--user', u]
+    cmd.append(apk)
+    return adb(*cmd)
+
+
+def install_ok(r):
+    return 'Success' in (r.stdout + r.stderr)
+
+
+def launch_app(pkg):
+    """可靠启动 app:先解析启动 Activity 用 am start -n(monkey -c LAUNCHER 对某些 app 不可靠),
+    解析不到再回退 monkey。返回启动用的组件名或 'monkey'。"""
+    comp = None
+    out = adb('shell', 'cmd', 'package', 'resolve-activity', '--brief', pkg).stdout
+    for line in out.strip().splitlines():
+        line = line.strip()
+        if '/' in line and line.startswith(pkg):
+            comp = line
+            break
+    if comp:
+        adb('shell', 'am', 'start', '-n', comp)
+        return comp
+    adb('shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1')
+    return 'monkey'
+
+
 def place_in_zyg(local_path, remote_path):
     """把本机文件放到 system_file 标签目录(如 re.zyg.fri)里。
 

@@ -37,8 +37,8 @@ def ensure_running(apk, pkg, do_install):
         # 装这个加壳 APK(签名可能和当前不同,先卸)
         print(f'[*] 安装加壳 APK 以供分析: {os.path.basename(apk)}')
         util.adb('uninstall', pkg)
-        r = util.adb('install', '-r', apk)
-        if 'Success' not in (r.stdout + r.stderr):
+        r = util.install_apk(apk)          # 默认 --user 0
+        if not util.install_ok(r):
             sys.exit(f'[!] 安装失败: {r.stdout}{r.stderr}')
     elif not installed:
         sys.exit(f'[!] {pkg} 未安装,去掉 --no-install 让我装,或先手动装')
