@@ -35,16 +35,48 @@
 
 ---
 
-## 安装
+## 依赖
 
-纯脚本,无需安装。依赖:
+纯脚本,无需安装。按阶段分:
 
-- `python3`(标准库即可)
-- `java`、[`apktool`](https://apktool.org/)、[`uber-apk-signer`](https://github.com/patrickfav/uber-apk-signer)(重打包阶段)
-- `frida` / ZygiskFrida、`adb`(dump 阶段,仅当你要自己抓 DEX)
+### 电脑端(host)
 
-工具路径默认 `~/.apklab/apktool_3.0.3.jar`、`~/.apklab/uber-apk-signer-1.3.0.jar`,
-可用环境变量 `APKTOOL_JAR` / `SIGNER_JAR` 覆盖。
+| 工具 | 用在哪 | 说明 |
+|---|---|---|
+| `python3`(标准库即可) | 全程 | 跑本项目脚本 |
+| `java` | 重打包 | 跑 apktool / signer |
+| [`apktool`](https://apktool.org/) | 重打包 | 默认 `~/.apklab/apktool_3.0.3.jar`,或环境变量 `APKTOOL_JAR` |
+| [`uber-apk-signer`](https://github.com/patrickfav/uber-apk-signer) | 重打包 | 默认 `~/.apklab/uber-apk-signer-1.3.0.jar`,或 `SIGNER_JAR`;自动建 debug key |
+| `zip` / `unzip` | 重打包 | 换 dex |
+| `aapt`(Android build-tools) | 看包名/入口 | `~/Android/Sdk/build-tools/*/aapt`,非必需 |
+| `adb` | dump + 装机 | |
+| `frida` client | dump | 版本要和手机上的 gadget **对齐** |
+| `dexdump` / `jadx` | 核对(可选) | 验证脱出的 dex |
+
+### 手机端(device)——**仅 dump 阶段需要**
+
+> 重打包出来的脱壳 APK **装到任意手机都能跑,不需要 root / 不需要下面这些**。
+> 下面这套只在「你要自己从加壳 app 抓 DEX」时才需要。
+
+- **已 root**(KernelSU / Magisk / APatch 任一)
+- **Zygisk 实现**:ZygiskNext(`zygisksu`)或 Magisk 自带 Zygisk
+- **ZygiskFrida 模块**([lico-n/ZygiskFrida](https://github.com/lico-n/ZygiskFrida)),刷入重启
+- **frida-gadget .so**(版本和电脑上 frida client 对齐),放到 ZygiskFrida 工作目录
+  `/data/local/tmp/re.zyg.fri/libgadget.so`
+- 该目录下三个配置文件(见下「用法 B」):`config.json`(注入哪些进程)、
+  `libgadget.config.so`(script 模式)、`config.json.example`(= 本项目的 `dump_full.js`)
+- `adb` 能拿到 root(`su`)
+
+### 获取目标包名 / 入口
+
+`repack.py` 会**自动**从 manifest 读包名,一般不用管。要手动查:
+
+```bash
+aapt dump badging 目标.apk | grep -E "^package|launchable-activity"
+#   package: name='com.xxx' ...
+#   launchable-activity: name='com.xxx.SomeActivity' ...   ← 桌面入口(不是真 Application)
+```
+注意 `dump_full.js` 落盘要用到包名(写进脚本顶部 `CFG.PKG`)。
 
 ---
 
@@ -81,7 +113,11 @@ python3 deshell/repack.py ... --keep-shell-lib libvuoum.so,libvuoum-x86.so
 3. 启动 app,等十几秒,脚本会把每个已解密 DEX 写到 `/data/data/<pkg>/zf_mdex_N.bin`。
 4. 拉下来并重建成合法 DEX:
    ```bash
+   # dump 文件在 app 私有目录(/data/data/<pkg>/,mode 0600、app uid 所有),
+   # 所以不能用 adb pull(会 "0 files pulled" 权限失败),必须用 root 的 su -c cat 导出:
    for n in $(seq 1 20); do adb shell su -c "cat /data/data/<pkg>/zf_mdex_$n.bin" > zf_mdex_$n.bin 2>/dev/null; done
+   # 可选:看脚本抓到几个 / 诊断
+   adb shell su -c "cat /data/data/<pkg>/zf_mdex_manifest.txt"
    python3 deshell/rebuild_dex.py zf_mdex_*.bin      # 出 classes_main_N.dex
    ```
 5. 回到 A。

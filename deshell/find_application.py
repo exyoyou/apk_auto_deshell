@@ -74,13 +74,19 @@ def main(paths, app_pkg=None):
 
     def score(desc):
         name = dotted(desc)
-        # app 自有包优先;明显的框架/SDK Application 靠后
+        clen = len(chain(desc, supers) or [])   # 继承链长度:真 Application 通常堆在一串基类之上(最长)
         prefer = 0
-        if app_pkg and name.startswith(app_pkg.split('.')[0]):
-            prefer -= 2
-        if re.search(r'(hilt_|_hilt|^androidx\.|multidex|bugly|mob\.|kwad|bytedance|pangle|baidu|tencent)', name, re.I):
-            prefer += 2
-        return (prefer, name)
+        # app 自有包优先(有 --pkg 时):匹配得越细,prefer 越低
+        if app_pkg:
+            if name.startswith(app_pkg.rsplit('.', 1)[0]):
+                prefer -= 2
+            elif name.startswith(app_pkg.split('.')[0] + '.'):
+                prefer -= 1
+        # 明显的第三方 SDK Application 靠后
+        if re.search(r'(hilt_|_hilt|^androidx\.|multidex|bugly|^com\.(mob|kwad|bytedance|pangle|baidu|tencent|alipay|aggmoread|switfpass|beizi)\.)', name, re.I):
+            prefer += 3
+        # 排序:SDK 惩罚 → 继承链更长者优先 → 名字
+        return (prefer, -clen, name)
 
     leaves.sort(key=score)
 

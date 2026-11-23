@@ -29,6 +29,20 @@ def run(cmd, **kw):
     return subprocess.run(cmd, check=True, **kw)
 
 
+def pkg_from_apk(apk):
+    """用 aapt 直接从 APK 读包名(拿不到就返回 None)"""
+    aapt = shutil.which('aapt') or next(iter(sorted(
+        glob.glob(os.path.expanduser('~/Android/Sdk/build-tools/*/aapt')), reverse=True)), None)
+    if not aapt:
+        return None
+    try:
+        out = subprocess.run([aapt, 'dump', 'badging', apk], capture_output=True, text=True).stdout
+        m = re.search(r"package: name='([^']+)'", out)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
 def collect_dexes(dex_dir, dex_list):
     files = []
     if dex_dir:
@@ -70,7 +84,10 @@ def main():
             sys.exit(f'[!] 找不到 {name}: {jar}(用环境变量 APKTOOL_JAR / SIGNER_JAR 指定)')
 
     dex_files = collect_dexes(args.dex_dir, args.dex)
-    app = args.app or (detect_app(dex_files, args.pkg) if args.auto else None)
+    pkg = args.pkg or pkg_from_apk(args.apk)       # 没传 --pkg 就用 aapt 从 APK 读(辅助 --auto 排序)
+    if pkg and not args.pkg:
+        print(f'[*] 包名(aapt 自动识别): {pkg}')
+    app = args.app or (detect_app(dex_files, pkg) if args.auto else None)
     if not app:
         sys.exit('[!] 必须用 --app 指定真实 Application,或用 --auto 自动识别')
     print(f'[*] 真实 Application 入口: {app}')
@@ -97,6 +114,13 @@ def main():
     xml = xml[:m.start(2)] + app + xml[m.end(2):]
     open(mf, 'w', encoding='utf-8').write(xml)
     print(f'[*] 入口 Application: {old}  ->  {app}')
+
+    # 兜底:aapt 没拿到时从 manifest 读包名(用于安装提示)
+    if not pkg:
+        pm = re.search(r'\bpackage="([^"]+)"', xml)
+        pkg = pm.group(1) if pm else None
+        if pkg:
+            print(f'[*] 包名(manifest 自动识别): {pkg}')
 
     # 3) 重建
     run(['java', '-jar', APKTOOL, 'b', work, '-o', unsigned])
@@ -137,8 +161,8 @@ def main():
     print('\n[✓] 完成。可安装 APK:')
     for s in signed:
         print('   ', os.path.abspath(s))
-    print('\n安装(签名不同,先卸原版):')
-    print(f'    adb uninstall {args.pkg or "<包名>"}')
+    print('\n安装(签名不同,先卸原版;脱壳版可装在未 root 的机器上):')
+    print(f'    adb uninstall {pkg or "<包名>"}')
     print(f'    adb install -r {signed[0] if signed else "<signed.apk>"}')
 
 
